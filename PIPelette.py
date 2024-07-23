@@ -82,7 +82,9 @@ mask = core.std.PropToClip(clip=overlay, prop='_Alpha')
 ###################### PARAMETERS
 #################################
 
+PAD_MOD16 = 1
 LUMA_KEY_LOWER_BOUND = 1
+CLIP_LUMA = 1 #if 1: Y=0 to LUMA_KEY_LOWER_BOUND are clipped to Y=LUMA_KEY_LOWER_BOUND. If 0, remapping is performed in LUMA_KEY_LOWER_BOUND;255 range.
 
 # BD supports 480, 576, 720 or 1080. UHD BD does NOT support PIP.
 lut_matrix_height = {
@@ -116,13 +118,18 @@ def mod16ify_bmask(n, f) -> vs.VideoFrame:
     np.copyto(np.asarray(vsf), vect_mod16(np.asarray(vsf[0])))
     return vsf
 
+def clip_luma(n, f) -> vs.VideoFrame:
+    vsf = f.copy()
+    np.copyto(np.asarray(vsf), np.clip(np.asarray(vsf[0]), LUMA_KEY_LOWER_BOUND, None))
+    return vsf
+
 def set_pip_visible_range(clip: vs.VideoNode, min_luma_out: int = LUMA_KEY_LOWER_BOUND) -> vs.VideoNode:
     clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=min_luma_out, max_out=255, planes=0)
     clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=0, max_out=255, planes=[1,2])
     return clip
 
 def PIPelette(
-    clip: vs.VideoNode, overlay: vs.VideoNode, mask: vs.VideoNode, /, *, append_frame: bool = True,
+    clip: vs.VideoNode, overlay: vs.VideoNode, mask: vs.VideoNode, /, *, pad_mod16: bool = PAD_MOD16, append_frame: bool = True,
 ) -> vs.VideoNode:
     """
     clip:    main program, YUV limited range
@@ -134,14 +141,21 @@ def PIPelette(
     :return: secondary video to overlay via BD PIP framework.
     """
     assert clip.format.color_family == vs.YUV == overlay.format.color_family, "Only YUV clips."
-    #assert clip.format.bits_per_sample == 8 == overlay.format.bits_per_sample, "Only 8-bit for BDAV."
+    assert clip.format.bits_per_sample == overlay.format.bits_per_sample == mask.format.bits_per_sample, "depth mismatch."
     assert mask.format.color_family == vs.GRAY and 1 == mask.format.num_planes, "Only 2D grayscale mask."
 
+    #assert clip.format is None, f"{clip.format} {overlay.format} {mask.format}"
     burned_clip = core.std.MaskedMerge(clip, overlay, mask)
-    burned_clip = set_pip_visible_range(burned_clip)
+
+    if CLIP_LUMA:
+        burned_clip = core.std.ModifyFrame(burned_clip, burned_clip, clip_luma)
+    else:
+        burned_clip = set_pip_visible_range(burned_clip)
+
     binmask = core.std.Binarize(mask, 1)
     #binmask = bmask_mod16(binmask)
-    binmask = core.std.ModifyFrame(binmask, binmask, mod16ify_bmask)
+    if pad_mod16:
+        binmask = core.std.ModifyFrame(binmask, binmask, mod16ify_bmask)
 
     # The secondary video (=PIP video) decoder WILL underflow when it reaches the end of the stream.
     # This means the frame will NOT be erased from the display. This is a critical issue if the PIP
@@ -150,6 +164,7 @@ def PIPelette(
 
     pip_clip = core.std.MaskedMerge(blank, burned_clip, binmask)
     pip_clip = core.std.SetFrameProp(pip_clip, prop="_ColorRange", intval=int(vs.RANGE_LIMITED))
+
     if append_frame:
         pip_clip = pip_clip + core.std.BlankClip(pip_clip, length=1, color=[0, 128, 128])
     return pip_clip
