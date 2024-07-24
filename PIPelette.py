@@ -52,6 +52,7 @@ SOFTWARE.
 
 from numba import njit, prange
 from pathlib import Path
+from functools import partial
 import numpy as np
 import os
 
@@ -70,6 +71,8 @@ core.std.LoadPlugin(upwd_plugins.joinpath('subtext', 'build', 'libsubtext.so'))
 
 # MAIN PROGRAM
 clip = core.ffms2.Source(Path(upwd).joinpath("nc2.mp4"))
+clip = core.resize.Point(clip, format=vs.YUV444P8) #Process everything in 444P
+
 target_matrix = None # None => guess from clip height
 
 # OVERLAY PROGRAM with mask (e.g. ASS script)
@@ -98,7 +101,6 @@ lut_matrix_height = {
 if target_matrix is None:
     target_matrix = lut_matrix_height.get(clip.height, None)
 assert target_matrix is not None
-assert LUMA_KEY_LOWER_BOUND > 0
 
 ###################### FUNCTIONS, no need to read further
 
@@ -120,18 +122,23 @@ def mod16ify_bmask(n, f) -> vs.VideoFrame:
     np.copyto(np.asarray(vsf[0]), vect_mod16(np.asarray(vsf[0])))
     return vsf
 
-def clip_luma(n, f) -> vs.VideoFrame:
+def f_clip_luma(n, f, *, min_luma: int) -> vs.VideoFrame:
     vsf = f.copy()
-    np.copyto(np.asarray(vsf[0]), np.clip(np.asarray(vsf[0]), LUMA_KEY_LOWER_BOUND, None))
+    np.copyto(np.asarray(vsf[0]), np.clip(np.asarray(vsf[0]), min_luma, None))
     return vsf
 
-def set_pip_visible_range(clip: vs.VideoNode, min_luma_out: int = LUMA_KEY_LOWER_BOUND) -> vs.VideoNode:
-    clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=min_luma_out, max_out=255, planes=0)
-    #clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=0, max_out=255, planes=[1,2])
+def set_pip_visible_range(
+    clip: vs.VideoNode, *, min_luma_out: int = LUMA_KEY_LOWER_BOUND, clip_luma: bool = CLIP_LUMA
+) -> vs.VideoNode:
+    assert min_luma_out > 0
+    if clip_luma:
+        clip = core.std.ModifyFrame(clip, clip, partial(f_clip_luma, min_luma=min_luma_out))
+    else:
+        clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=min_luma_out, max_out=255, planes=0)
     return clip
 
 def PIPelette(
-    clip: vs.VideoNode, overlay: vs.VideoNode, mask: vs.VideoNode, /, *, pad_mod16: bool = PAD_MOD16, append_frame: bool = True,
+    clip: vs.VideoNode, overlay: vs.VideoNode, mask: vs.VideoNode, *, pad_mod16: bool = PAD_MOD16, append_frame: bool = True,
 ) -> vs.VideoNode:
     """
     clip:    main program, YUV limited range
@@ -145,17 +152,12 @@ def PIPelette(
     assert clip.format.color_family == vs.YUV == overlay.format.color_family, "Only YUV clips."
     assert clip.format.bits_per_sample == overlay.format.bits_per_sample == mask.format.bits_per_sample, "depth mismatch."
     assert mask.format.color_family == vs.GRAY and 1 == mask.format.num_planes, "Only 2D grayscale mask."
-    assert clip.format.bits_per_sample == 8, "BDAV requires 8-bit depth."
-    #assert clip.format is None, f"{clip.format} {overlay.format} {mask.format}"
-    burned_clip = core.std.MaskedMerge(clip, overlay, mask)
+    assert clip.format.bits_per_sample == 8, "Only 8-bit depth for BDAV."
 
-    if CLIP_LUMA:
-        burned_clip = core.std.ModifyFrame(burned_clip, burned_clip, clip_luma)
-    else:
-        burned_clip = set_pip_visible_range(burned_clip)
+    burned_clip = core.std.MaskedMerge(clip, overlay, mask)
+    burned_clip = set_pip_visible_range(burned_clip)
 
     binmask = core.std.Binarize(mask, 1)
-    #binmask = bmask_mod16(binmask)
     if pad_mod16:
         binmask = core.std.ModifyFrame(binmask, binmask, mod16ify_bmask)
 
