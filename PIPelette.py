@@ -82,9 +82,10 @@ mask = core.std.PropToClip(clip=overlay, prop='_Alpha')
 ###################### PARAMETERS
 #################################
 
-PAD_MOD16 = 1
-LUMA_KEY_LOWER_BOUND = 1
-CLIP_LUMA = 1 #if 1: Y=0 to LUMA_KEY_LOWER_BOUND are clipped to Y=LUMA_KEY_LOWER_BOUND. If 0, remapping is performed in LUMA_KEY_LOWER_BOUND;255 range.
+PAD_MOD16 = True          # PIP mask is mod16 aligned, highly recommended
+LUMA_KEY_LOWER_BOUND = 1  # Min LUMA (Y) value of the PIP clip. CANNOT be zero.
+CLIP_LUMA = True          # True: Y=0 to LUMA_KEY_LOWER_BOUND-1 are clipped to LUMA_KEY_LOWER_BOUND.
+                          #  False: all luma is remapped in LUMA_KEY_LOWER_BOUND;255.
 
 # BD supports 480, 576, 720 or 1080. UHD BD does NOT support PIP.
 lut_matrix_height = {
@@ -97,6 +98,7 @@ lut_matrix_height = {
 if target_matrix is None:
     target_matrix = lut_matrix_height.get(clip.height, None)
 assert target_matrix is not None
+assert LUMA_KEY_LOWER_BOUND > 0
 
 ###################### FUNCTIONS, no need to read further
 
@@ -115,17 +117,17 @@ def vect_mod16(npf):
 
 def mod16ify_bmask(n, f) -> vs.VideoFrame:
     vsf = f.copy()
-    np.copyto(np.asarray(vsf), vect_mod16(np.asarray(vsf[0])))
+    np.copyto(np.asarray(vsf[0]), vect_mod16(np.asarray(vsf[0])))
     return vsf
 
 def clip_luma(n, f) -> vs.VideoFrame:
     vsf = f.copy()
-    np.copyto(np.asarray(vsf), np.clip(np.asarray(vsf[0]), LUMA_KEY_LOWER_BOUND, None))
+    np.copyto(np.asarray(vsf[0]), np.clip(np.asarray(vsf[0]), LUMA_KEY_LOWER_BOUND, None))
     return vsf
 
 def set_pip_visible_range(clip: vs.VideoNode, min_luma_out: int = LUMA_KEY_LOWER_BOUND) -> vs.VideoNode:
     clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=min_luma_out, max_out=255, planes=0)
-    clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=0, max_out=255, planes=[1,2])
+    #clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=0, max_out=255, planes=[1,2])
     return clip
 
 def PIPelette(
@@ -143,7 +145,7 @@ def PIPelette(
     assert clip.format.color_family == vs.YUV == overlay.format.color_family, "Only YUV clips."
     assert clip.format.bits_per_sample == overlay.format.bits_per_sample == mask.format.bits_per_sample, "depth mismatch."
     assert mask.format.color_family == vs.GRAY and 1 == mask.format.num_planes, "Only 2D grayscale mask."
-
+    assert clip.format.bits_per_sample == 8, "BDAV requires 8-bit depth."
     #assert clip.format is None, f"{clip.format} {overlay.format} {mask.format}"
     burned_clip = core.std.MaskedMerge(clip, overlay, mask)
 
