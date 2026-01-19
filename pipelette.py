@@ -216,11 +216,12 @@ class PIPelette:
         # Also enforce that pip length does not exceed base clip
         if length is None:
             length = len(clip)
-        length = min(len(clip), int(self.append_clear_frame) + min(len(overlay), len(mask), length))
+        length_burn = min(len(overlay), len(mask), length, len(clip))
+        length = min(len(clip), int(self.append_clear_frame) + length_burn)
 
         pip_clip = core.std.BlankClip(combined, length=length, color=[self.default_pip_clip_luma, 128, 128])
 
-        pip_clip = core.std.MaskedMerge(pip_clip, combined, binmask)
+        pip_clip = core.std.MaskedMerge(pip_clip, combined[:length_burn], binmask[:length_burn])
         pip_clip = core.std.SetFrameProp(pip_clip, prop="_ColorRange", intval=int(vs.RANGE_LIMITED))
         return pip_clip
 ####
