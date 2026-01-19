@@ -130,7 +130,11 @@ class PIPelette:
         np.copyto(np.asarray(vsf[0]), _vect_mod16(np.asarray(vsf[0])))
         return vsf
 
-    def _check_and_setup(self, clip: vs.VideoNode, overlay: vs.VideoNode) -> tuple[vs.VideoNode, vs.VideoNode, vs.VideoNode]:
+    def _check_and_setup(self,
+        clip: vs.VideoNode,
+        overlay: vs.VideoNode,
+        mask: vs.VideoNode
+    ) -> tuple[vs.VideoNode, vs.VideoNode, vs.VideoNode]:
         if clip.format.color_family != vs.YUV:
             raise TypeError(f"clip isn't YUV, got '{clip.format.color_family}'.")
 
@@ -158,10 +162,8 @@ class PIPelette:
             if overlay_props['_ColorRange'] != vs.RANGE_LIMITED:
                 raise ValueError("overlay isn't limited range.")
 
-        mask = core.std.PropToClip(overlay)
-
         assert clip.format.bits_per_sample == overlay.format.bits_per_sample == mask.format.bits_per_sample, "bitdepth must match for all assets."
-        assert mask.format.color_family == vs.GRAY and 1 == mask.format.num_planes, "Only 2D grayscale _Alpha."
+        assert mask.format.color_family == vs.GRAY and 1 == mask.format.num_planes, "Only grayscale for the mask."
         assert clip.format.bits_per_sample == 8, "Only 8-bit depth for BDAV."
         assert clip.width == mask.width and clip.height == mask.height, "clip and mask shapes must match."
 
@@ -172,24 +174,31 @@ class PIPelette:
 
         return clip, overlay, mask
 
-
-    def PIPelette(self, clip: vs.VideoNode, overlay: vs.VideoNode, merge_overlay: bool = True) -> vs.VideoNode:
+    def apply(self,
+            clip: vs.VideoNode,
+            overlay: vs.VideoNode,
+            mask: vs.VideoNode | None = None,
+            merge_overlay: bool = True,
+            length: int | None = None,
+        ) -> vs.VideoNode:
         """
         Generate the smooth overlay clip to use as secondary video.
 
         Args:
             clip: primary feature
             overlay: clip to display smoothly on top of primary
+            mask: alpha mask for the overlay. If None, the overlay must have a _Alpha prop.
             merge_overlay: If True (default) the secondary video contains the overlay. If False, the secondary video
              is a mask sized to hide the overlay from the primary.
              E.g. "False" could mean primary contains the hardsub, and the secondary video can be used to hide it.
-
+            length: If set: output duration in frames, else inherit from clip or overlay, whichever is shorter.
         Returns:
             overlay clip to use as secondary video
         """
-        clip, overlay, mask = self._check_and_setup(clip, overlay)
+        if mask is None:
+            mask = core.std.PropToClip(overlay, "_Alpha")
 
-        source_format = clip.format
+        clip, overlay, mask = self._check_and_setup(clip, overlay, mask)
 
         if merge_overlay:
             combined = core.std.MaskedMerge(clip, overlay, mask)
@@ -205,9 +214,10 @@ class PIPelette:
         # This means the frame will NOT be erased from the display. This is a critical issue if the PIP
         # is shorter than the main program. Appending a transparent frame ensures the undisplay prior to the underflow
         # Also enforce that pip length does not exceed base clip
-        length = min(len(clip), len(overlay) + int(self.append_clear_frame))
+        if length is None:
+            length = len(clip)
+        length = min(len(clip), int(self.append_clear_frame) + min(len(overlay), len(mask), length))
 
-        length = 7920
         pip_clip = core.std.BlankClip(combined, length=length, color=[self.default_pip_clip_luma, 128, 128])
 
         pip_clip = core.std.MaskedMerge(pip_clip, combined, binmask)

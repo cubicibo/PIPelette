@@ -33,15 +33,37 @@ ass_script = "/path/to/typesetting/script.ass"
 overlay = core.sub.TextFile(primary, file=ass_script, fontdir='/a/dir/with/fonts/', blend=False)
 
 # ... pick the resampler to your personal taste (processing in 444 is preferred)
-primary = core.resize.Bilinear(primary, format=vs.YUV444P8, ...) #specify parameters like chromaloc as needed
+# specify parameters like chromaloc as needed
+primary = core.resize.Bilinear(primary, format=vs.YUV444P8, ...)
 
-# Generate the secondary video track that will blend smoothly on top of primary.
-pip_overlay = PIPelette().PIPelette(primary, overlay)
+# Generate the secondary video track that will blend smoothly on top of primary
+mask = core.std.PropToClip(overlay, "_Alpha")
+pip_overlay = PIPelette().apply(clip=primary, overlay=overlay, mask=mask)
 
 # Convert to 420p for BD
 pip_overlay = core.resize.Bilinear(pip_overlay, format=vs.YUV420P8)
 pip_overlay.set_output()
 ```
+
+### Advanced parameters
+I foresee no sane reason to ever change any of those parameters. You are on your own if you do.
+```python
+pipelette = PIPelette(
+	min_luma: int = 16,    # Minimum non-masked luma for the overlay [16, 235[
+	pad_mod16: bool = True,# Pad the mask to mod16 dimensions to avoid compression artifacts
+	matrix = None,         # For RGB overlay, if None guessed from clip height. Unused for YUV input
+	append_clear_frame: bool | int = True # Append a transparent frame at the end of the pip clip
+)
+```
+
+```python
+output = pipelette.apply(
+	..., # clip parameters...
+	merge_overlay: bool = True, # If False: pip_overlay contains solely the mask over primary
+	length: int | None = None,  # output duration, if None: inferred from shortest clip provided (primary, overlay, mask)
+)
+```
+`merge_overlay=False` can be used to mask typesetting burned in the primary video, to let one enjoy the pristine footage without edits.
 
 ## Requirements
 - VapourSynth
